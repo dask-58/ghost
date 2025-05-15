@@ -13,12 +13,12 @@ type PlayerRequest struct {
 
 func main() {
 	// Handle URL
-	http.HandleFunc("/", func (w http.ResponseWriter, r *http.Request)  {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "RoyaleQueue matchmaking server")
 	})
 
-	// hello
-	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+	// join
+	http.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Only POST method allowed", http.StatusMethodNotAllowed)
 			return
