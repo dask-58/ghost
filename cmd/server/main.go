@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"github.com/dask-58/ghost/internal/queue"
 )
 
 type PlayerRequest struct {
@@ -30,7 +31,8 @@ func main() {
 			http.Error(w, "Only POST method allowed", http.StatusBadRequest)
 			return
 		}
-		defer r.Body.Close()
+
+		defer r.Body.Close() // Prevent resource leaks
 
 		var req PlayerRequest
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -38,9 +40,17 @@ func main() {
 			return
 		}
 
-		fmt.Printf("Received player ID: %s\n", req.PlayerId)
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Player %s added to the queue", req.PlayerId)
+		// Add player to Queue (duplicates not allowed)
+		player := queue.Player{ID: req.PlayerId}
+		added := queue.JoinQueue(player)
+		if added {
+			fmt.Printf("Player %s added to queue. Current queue: %v\n", req.PlayerId, queue.GetQueue())
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "Player %s added to queue", req.PlayerId)
+		} else {
+			fmt.Printf("Duplicate player %s tried to join\n", req.PlayerId)
+			http.Error(w, "Player already in queue", http.StatusConflict)
+		}
 	})
 
 	fmt.Println("Server running on http://localhost:8080")
