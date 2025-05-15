@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
+	"time"
 	"github.com/dask-58/ghost/internal/queue"
 )
 
@@ -12,7 +14,26 @@ type PlayerRequest struct {
 	PlayerId string `json:"playerId"`
 }
 
+var addedSinceLastLog int64
+
 func main() {
+	startTime := time.Now() // Capture server start time
+
+	// Log summary every 1 second.
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			count := atomic.SwapInt64(&addedSinceLastLog, 0)
+			if count > 0 {
+				elapsed := time.Since(startTime).Round(time.Second)
+				fmt.Printf("[Summary after %v] %d players added in last 1 second. Queue size: %d\n",
+					elapsed, count, len(queue.GetQueue()))
+			}
+		}
+	}()
+
 	// Handle URL
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "RoyaleQueue matchmaking server")
@@ -26,13 +47,11 @@ func main() {
 		}
 
 		body, err := io.ReadAll(r.Body)
-
 		if err != nil {
-			http.Error(w, "Only POST method allowed", http.StatusBadRequest)
+			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-
-		defer r.Body.Close() // Prevent resource leaks
+		defer r.Body.Close()
 
 		var req PlayerRequest
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -40,15 +59,14 @@ func main() {
 			return
 		}
 
-		// Add player to Queue (duplicates not allowed)
 		player := queue.Player{ID: req.PlayerId}
 		added := queue.JoinQueue(player)
 		if added {
-			fmt.Printf("Player %s added to queue. Current queue: %v\n", req.PlayerId, queue.GetQueue())
+			atomic.AddInt64(&addedSinceLastLog, 1)
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintf(w, "Player %s added to queue", req.PlayerId)
 		} else {
-			fmt.Printf("Duplicate player %s tried to join\n", req.PlayerId)
+			fmt.Printf("Duplicate player %s tried to join\n", req.PlayerId) // still logs duplicates
 			http.Error(w, "Player already in queue", http.StatusConflict)
 		}
 	})
