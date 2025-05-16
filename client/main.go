@@ -12,7 +12,8 @@ import (
 func joinRequest(httpClient *http.Client, url string, playerId string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	data := []byte(fmt.Sprintf(`{"playerId":"%s"}`, playerId))
+	data := make([]byte, 0, 64)
+	data = fmt.Appendf(data, `{"playerId":"%s"}`, playerId)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 
 	if err != nil {
