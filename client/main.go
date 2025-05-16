@@ -29,7 +29,7 @@ func joinRequest(httpClient *http.Client, url string, playerId string, wg *sync.
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("Player %s joined queue, response: %s\n", playerId, resp.Status)
+		// log.Printf("Player %s joined queue, response: %s\n", playerId, resp.Status)
 	} else if resp.StatusCode == http.StatusConflict {
 		log.Printf("Player %s already in queue, response: %s\n", playerId, resp.Status)
 	} else {
@@ -71,5 +71,6 @@ func main() {
 
 	elapsedTime := time.Since(startTime)
 	log.Printf("All %d requests completed in %s.\n", numRequests, elapsedTime)
+	// not exactly average but maybe the no of requests at some instance which could be completed in a second
 	log.Printf("Average requests per second: %.2f\n", float64(numRequests) / elapsedTime.Seconds())
 }
