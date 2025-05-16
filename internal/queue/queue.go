@@ -13,7 +13,7 @@ type PlayerQueue struct {
 	playerSet 		map[string]struct{} // only to check existence O(1)
 }
 
-func __init_queue() *PlayerQueue {
+func NewQueue() *PlayerQueue {
 	return &PlayerQueue{
 		players: make([]Player, 0),
 		playerSet: make(map[string]struct{}),
