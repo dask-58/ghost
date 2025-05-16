@@ -99,7 +99,7 @@ func main() {
 			select {
 			case <- ticker.C: 
 				count := atomic.SwapInt64(&addedSinceLastLog, 0)
-				if count > 0 || playerQueue.Size() > 0 { // Log even if no new players but queue isn't empty
+				if count > 0 { // Log even if no new players but queue isn't empty
 					elapsed := time.Since(startTime).Round(time.Second)
 					logger.Printf("[Summary after %v] %d players added in last 2 seconds. Queue size: %d\n", elapsed, count, playerQueue.Size())
 				}
@@ -114,7 +114,7 @@ func main() {
 	mux.HandleFunc("/join", serverInstance.joinHandler)
 
 	httpServer := &http.Server{
-		Addr: ".8080",
+		Addr: ":8080",
 		Handler: mux,
 	}
 
