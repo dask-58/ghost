@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -36,42 +37,95 @@ func joinRequest(httpClient *http.Client, url string, playerId string, wg *sync.
 	} else {
 		log.Printf("Player %s failed to join, status: %s\n", playerId, resp.Status)
 	}
+}
 
+func simulateJoins(requests int, maxConcurrency int, delta int, url string, httpClient *http.Client) {
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	log.Printf("Starting SIMULATED ARRIVAL: %d join requests, max concurrency %d, mean arrival delay ~%dms...\n",
+		requests, maxConcurrency, delta)
+	startTime := time.Now()
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	for i := 1; i <= requests; i++ {
+		wg.Add(1)
+		playerId := fmt.Sprintf("sim-player-%d", i)
+
+		go func(pId string) {
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			joinRequest(httpClient, url, pId, &wg)
+		}(playerId)
+
+		if delta > 0 {
+			randomFactor := 0.5 + rnd.Float64()
+			delay := time.Duration(float64(delta) * randomFactor * float64(time.Millisecond))
+			time.Sleep(delay)
+		}
+	}
+
+	wg.Wait()
+	close(semaphore)
+
+	elapsedTime := time.Since(startTime)
+	log.Printf("SIMULATED ARRIVAL: All %d requests completed in %s.\n", requests, elapsedTime)
+	
+	if elapsedTime.Seconds() > 0 {
+		log.Printf("SIMULATED ARRIVAL: Effective throughput: %.2f req/sec\n", float64(requests) / elapsedTime.Seconds())
+	}
+}
+
+func spamJoinRequests(requests int, maxConcurrency int, url string, httpClient *http.Client) {
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	log.Printf("Starting SPAM REQUESTS: %d join requests, max concurrency %d...\n", requests, maxConcurrency)
+	startTime := time.Now()
+
+	for i := 1; i <= requests; i++ {
+		wg.Add(1)
+		playerId := fmt.Sprintf("spam-player-%d", i)
+		go func(pId string) {
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			joinRequest(httpClient, url, pId, &wg)
+		}(playerId)
+	}
+
+	wg.Wait()
+	close(semaphore)
+
+	elapsedTime := time.Since(startTime)
+	log.Printf("SPAM REQUESTS: All %d requests completed in %s.\n", requests, elapsedTime)
+	if elapsedTime.Seconds() > 0 {
+		log.Printf("SPAM REQUESTS: Effective throughput: %.2f req/sec\n", float64(requests) / elapsedTime.Seconds())
+	}
 }
 
 func main() {
 	url := "http://localhost:8080/join"
 
-	numRequests := 10000
-	maxConcurrent := 100 // max no of go routines sending requests at once
-
-	var wg sync.WaitGroup
-
+	sharedMaxConcurrency := 100
 	httpClient := &http.Client{
-		Timeout: 10 * time.Second, // Set a timeout for requests
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns: sharedMaxConcurrency + 10,
+			MaxIdleConnsPerHost: sharedMaxConcurrency + 10,
+			IdleConnTimeout: 90 * time.Second,
+		},
 	}
+
+	numSimulatedRequests := 10000
+	delta := 10
+	simulateJoins(numSimulatedRequests, sharedMaxConcurrency, delta, url, httpClient)
+
+	/*
+	numSpamRequests := 10000
+	time.Sleep(2 * time.Second) // if running both sequentially for logs
+	spamJoinRequests(numSpamRequests, sharedMaxConcurrency, url, httpClient)
+	*/
 	
-	semaphore := make(chan struct{}, maxConcurrent) // limit concurrency
 
-	log.Printf("Starting to send %d join requests with max concurrency %d...\n", numRequests, maxConcurrent)
-	startTime := time.Now()
-
-	for i := 1; i <= numRequests; i++ {
-		wg.Add(1)
-		semaphore <- struct{}{} // Acquire a spot
-		playerId := fmt.Sprintf("playerId:%d", i)
-
-		go func(pId string) {
-			defer func() { <-semaphore }() // Release spot
-			joinRequest(httpClient, url, pId, &wg)
-		}(playerId)
-	}
-
-	wg.Wait() // Wait for all goroutines to complete
-	close(semaphore)
-
-	elapsedTime := time.Since(startTime)
-	log.Printf("All %d requests completed in %s.\n", numRequests, elapsedTime)
-	// not exactly average but maybe the no of requests at some instance which could be completed in a second
-	log.Printf("Average requests per second: %.2f\n", float64(numRequests) / elapsedTime.Seconds())
+	log.Println("Client Simulation Finished")
 }
