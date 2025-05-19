@@ -1,0 +1,4 @@
+2025/05/19 19:30:44 Starting SIMULATED ARRIVAL: 1000 join requests, max concurrency 100, mean arrival delay ~5ms...
+2025/05/19 19:30:49 SIMULATED ARRIVAL: All 1000 requests completed in 5.451200792s.
+2025/05/19 19:30:49 SIMULATED ARRIVAL: Effective throughput: 183.45 req/sec
+2025/05/19 19:30:49 Client Simulation Finished
