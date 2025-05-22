@@ -40,7 +40,7 @@ type Matchmaker struct {
 
 	// Add a WaitGroup to track active goroutines
 	// This is important for graceful shutdown
-	wg sync.WaitGroup
+	// wg sync.WaitGroup
 }
 
 func NewMatchmaker(pq *queue.PlayerQueue, lgr *log.Logger, cfg Config) *Matchmaker {
@@ -64,7 +64,7 @@ func NewMatchmaker(pq *queue.PlayerQueue, lgr *log.Logger, cfg Config) *Matchmak
 
 func (m *Matchmaker) formLobby() {
 	// Signal to the WaitGroup that a goroutine has started
-	defer m.wg.Done()
+	// defer m.wg.Done()
 
 	currentQueueSize := m.playerQueue.Size()
 	if currentQueueSize < int(m.minLobbySize) {
