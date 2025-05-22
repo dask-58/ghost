@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dask-58/ghost/internal/matchmaker"
 	"github.com/dask-58/ghost/internal/queue"
 )
 
@@ -24,12 +25,14 @@ var addedSinceLastLog int64 // counter
 
 type Server struct {
 	playerQueue 	*queue.PlayerQueue
+	matchmaker 		*matchmaker.Matchmaker
 	logger 			*log.Logger
 }
 
-func NewServer(pq *queue.PlayerQueue, lgr *log.Logger) *Server {
+func NewServer(pq *queue.PlayerQueue, m_maker *matchmaker.Matchmaker,lgr *log.Logger) *Server {
 	return &Server {
 		playerQueue: pq,
+		matchmaker: m_maker,
 		logger: lgr,
 	}
 }
@@ -87,24 +90,29 @@ func (s *Server) joinHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	logger := log.New(os.Stdout, "SERVER: ", log.LstdFlags|log.Lmicroseconds)
 	playerQueue := queue.NewQueue()
-	serverInstance := NewServer(playerQueue, logger)
+
+	matchmakerConfig := matchmaker.Config{
+		LobbySize: 100,
+		Frequency: 2 * time.Second,
+	}
+
+	ghostMatchmaker := matchmaker.NewMatchmaker(playerQueue, logger, matchmakerConfig)
+
+	serverInstance := NewServer(playerQueue, ghostMatchmaker, logger)
 
 	startTime := time.Now()
 
-	go func ()  {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
+	go func() {
+		summaryTicker := time.NewTicker(2 * time.Second)
+		defer summaryTicker.Stop()
+		for range summaryTicker.C {
+			count := atomic.SwapInt64(&addedSinceLastLog, 0)
+			currentQueueSize := playerQueue.Size()
+			activeLobbyCount := ghostMatchmaker.GetActiveLobbyCount()
 
-		for {
-			select {
-			case <- ticker.C: 
-				count := atomic.SwapInt64(&addedSinceLastLog, 0)
-				if count > 0 { // Log even if no new players but queue isn't empty
-					elapsed := time.Since(startTime).Round(time.Second)
-					logger.Printf("[Summary after %v] %d players added in last 2 seconds. Queue size: %d\n", elapsed, count, playerQueue.Size())
-				}
-			case <-time.After(5 * time.Second): // Fallback 
-				return
+			if count > 0 || currentQueueSize > 0 || activeLobbyCount > 0 {
+				elapsed := time.Since(startTime).Round(time.Second)
+				logger.Printf("[Summary after %v] %d players added in last 2s. Queue size: %d. Active Lobbies (by Matchmaker): %d\n", elapsed, count, currentQueueSize, activeLobbyCount)
 			}
 		}
 	}()
@@ -118,30 +126,29 @@ func main() {
 		Handler: mux,
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go ghostMatchmaker.Start(ctx)
+
 	// Graceful shutdown
-	idleConnsClosed := make(chan struct{})
 	go func() {
-		sigint := make(chan os.Signal, 1)
-		signal.Notify(sigint, syscall.SIGINT, syscall.SIGTERM)
-		receivedSignal := <-sigint
-		logger.Printf("Received signal: %s. Shutting down server...", receivedSignal)
+		<-ctx.Done()
+		logger.Println("Received shutdown signal. Shutting down HTTP server...")
 
-		// Create a context with a timeout for shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
 
-		if err := httpServer.Shutdown(ctx); err != nil {
-			logger.Printf("HTTP server Shutdown: %v", err)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Printf("HTTP server Shutdown error: %v", err)
 		}
-		logger.Println("Server shutdown complete.")
-		close(idleConnsClosed)
+		logger.Println("HTTP Server shutdown complete.")
 	}()
 
 	logger.Println("Server running on http://localhost:8080")
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-		logger.Fatalf("HTTP server ListenAndServe: %v", err)
+		logger.Fatalf("HTTP server ListenAndServe error: %v", err)
 	}
 
-	<-idleConnsClosed // Wait
 	logger.Println("Application exiting.")
 }
