@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -27,14 +28,21 @@ type Server struct {
 	playerQueue 	*queue.PlayerQueue
 	matchmaker 		*matchmaker.Matchmaker
 	logger 			*log.Logger
+	statusTemplate 	*template.Template
 }
 
-func NewServer(pq *queue.PlayerQueue, m_maker *matchmaker.Matchmaker,lgr *log.Logger) *Server {
+func NewServer(pq *queue.PlayerQueue, m_maker *matchmaker.Matchmaker,lgr *log.Logger) (*Server, error) {
+	templatePath := "cmd/templates/status.html"
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse status template: %w", err)
+	}
 	return &Server {
 		playerQueue: pq,
 		matchmaker: m_maker,
 		logger: lgr,
-	}
+		statusTemplate: tmpl,
+	}, nil
 }
 
 func (s *Server) rootHandler(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +95,25 @@ func (s *Server) joinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET methods allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data := struct {
+		QueueSize     int
+		ActiveLobbies int
+	}{
+		QueueSize:     s.playerQueue.Size(),
+		ActiveLobbies: s.matchmaker.GetActiveLobbyCount(),
+	}
+	err := s.statusTemplate.Execute(w, data)
+	if err != nil {
+		s.logger.Printf("Error executing status template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
 func main() {
 	logger := log.New(os.Stdout, "SERVER: ", log.LstdFlags|log.Lmicroseconds)
 	playerQueue := queue.NewQueue()
@@ -98,7 +125,10 @@ func main() {
 
 	ghostMatchmaker := matchmaker.NewMatchmaker(playerQueue, logger, matchmakerConfig)
 
-	serverInstance := NewServer(playerQueue, ghostMatchmaker, logger)
+	serverInstance, err := NewServer(playerQueue, ghostMatchmaker, logger)
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
 
 	startTime := time.Now()
 
@@ -120,6 +150,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serverInstance.rootHandler)
 	mux.HandleFunc("/join", serverInstance.joinHandler)
+	mux.HandleFunc("/status", serverInstance.statusHandler)
 
 	httpServer := &http.Server{
 		Addr: ":8080",
