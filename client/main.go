@@ -116,7 +116,7 @@ func main() {
 		},
 	}
 
-	numSimulatedRequests := 10000
+	numSimulatedRequests := 1000
 	delta := 10
 	simulateJoins(numSimulatedRequests, sharedMaxConcurrency, delta, url, httpClient)
 
