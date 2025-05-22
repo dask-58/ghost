@@ -29,13 +29,14 @@ type Config struct {
 }
 
 type Matchmaker struct {
-	playerQueue *queue.PlayerQueue
-	logger      *log.Logger
-	config      Config
+	playerQueue 	*queue.PlayerQueue
+	logger      	*log.Logger
+	config      	Config
+	minLobbySize 	int64
 
-	lobbyIDcnt    int64
-	activeLobbies map[string]*Lobby
-	lobbiesMutex  sync.RWMutex
+	lobbyIDcnt    	int64
+	activeLobbies 	map[string]*Lobby
+	lobbiesMutex  	sync.RWMutex
 
 	// Add a WaitGroup to track active goroutines
 	// This is important for graceful shutdown
@@ -50,12 +51,15 @@ func NewMatchmaker(pq *queue.PlayerQueue, lgr *log.Logger, cfg Config) *Matchmak
 		cfg.Frequency = DefaultFrequency
 	}
 
-	return &Matchmaker{
+	m := &Matchmaker{
 		playerQueue:   pq,
 		logger:        lgr,
 		config:        cfg,
 		activeLobbies: make(map[string]*Lobby),
 	}
+
+	m.minLobbySize = int64(float64(cfg.LobbySize) * 0.75)
+	return m
 }
 
 func (m *Matchmaker) formLobby() {
@@ -63,16 +67,16 @@ func (m *Matchmaker) formLobby() {
 	defer m.wg.Done()
 
 	currentQueueSize := m.playerQueue.Size()
-	if currentQueueSize < m.config.LobbySize {
+	if currentQueueSize < int(m.minLobbySize) {
 		if currentQueueSize > 0 {
-			m.logger.Printf("Matchmaker: Not enough players for a new lobby. Have: %d, Need: %d", currentQueueSize, m.config.LobbySize)
+			m.logger.Printf("Not enough players for a new lobby. Have: %d, Need at least: %d", currentQueueSize, m.minLobbySize)
 		}
 		return
 	}
 
+	// Dequeue up to LobbySize players, but at least minLobbySize
 	FinalPlayers := m.playerQueue.DeQueue(m.config.LobbySize)
-
-	if len(FinalPlayers) == m.config.LobbySize {
+	if len(FinalPlayers) >= int(m.minLobbySize) {
 		newID := atomic.AddInt64(&m.lobbyIDcnt, 1)
 		lobby := Lobby{
 			ID:        fmt.Sprintf("lobby-%d", newID),
@@ -88,17 +92,10 @@ func (m *Matchmaker) formLobby() {
 		for i, p := range lobby.Players {
 			playerIDs[i] = p.ID
 		}
-		m.logger.Printf("Matchmaker: Lobby %s formed with %d players: %v. Queue size now: %d", lobby.ID, len(lobby.Players), playerIDs, m.playerQueue.Size())
-	} else if len(FinalPlayers) > 0 { // SHOULD NOT HAPPEN (IDEALLY)
-		m.logger.Printf("Matchmaker: Dequeued %d players, but needed %d. Re-queuing them (this indicates a potential issue).", len(FinalPlayers), m.config.LobbySize)
-		// This part needs to be safe. If m.playerQueue.JoinQueue is not safe for concurrent calls,
-		// you'll need to add a mutex around it within the PlayerQueue itself.
-		// For now, assuming it's safe or will be made safe.
-		for _, p := range FinalPlayers {
-			m.playerQueue.JoinQueue(p) // Ensure this is goroutine-safe
-		}
+		m.logger.Printf("Lobby %s formed with %d players: %v. Queue size now: %d", lobby.ID, len(lobby.Players), playerIDs, m.playerQueue.Size())
+	} else {
+		m.logger.Printf("Dequeued %d players, but needed at least %d. Not forming lobby.", len(FinalPlayers), m.minLobbySize)
 	}
-
 }
 
 func (m *Matchmaker) GetActiveLobbyCount() int {
@@ -108,20 +105,16 @@ func (m *Matchmaker) GetActiveLobbyCount() int {
 }
 
 func (m *Matchmaker) Start(ctx context.Context) {
-	m.logger.Printf("Matchmaker started. Will attempt to form lobbies of size %d every %v.", m.config.LobbySize, m.config.Frequency)
+	m.logger.Printf("Matchmaker started. Will attempt to form lobbies every %v.", m.config.Frequency)
 	ticker := time.NewTicker(m.config.Frequency)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			// Increment the WaitGroup counter before launching the goroutine
-			m.wg.Add(1)
-			go m.formLobby() // Launch formLobby in a new goroutine
+			m.formLobby() // Run synchronously
 		case <-ctx.Done():
-			// Wait for all active formLobby goroutines to finish
-			m.wg.Wait()
-			m.logger.Printf("Matchmaker: Shutting down. All pending lobby formations completed.")
+			m.logger.Println("Matchmaker: Shutting down.")
 			return
 		}
 	}
