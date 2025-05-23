@@ -22,26 +22,37 @@ type PlayerRequest struct {
 	PlayerId string `json:"playerId"`
 }
 
-var addedSinceLastLog int64 // counter
+var loggerAddedSinceLastLog int64
+var apiAddedSinceLastRead int64
 
 type Server struct {
-	playerQueue 	*queue.PlayerQueue
-	matchmaker 		*matchmaker.Matchmaker
-	logger 			*log.Logger
-	statusTemplate 	*template.Template
+	playerQueue     *queue.PlayerQueue
+	matchmaker      *matchmaker.Matchmaker
+	logger          *log.Logger
+	statusTemplate  *template.Template
+	startTime       time.Time
 }
 
-func NewServer(pq *queue.PlayerQueue, m_maker *matchmaker.Matchmaker,lgr *log.Logger) (*Server, error) {
+type StatusData struct {
+	QueueSize         int    `json:"queueSize"`
+	ActiveLobbies     int    `json:"activeLobbies"`
+	ServerUptime      string `json:"serverUptime"`
+	RecentlyJoined    int64  `json:"recentlyJoined"`
+	CurrentServerTime string `json:"currentServerTime"`
+}
+
+func NewServer(pq *queue.PlayerQueue, m_maker *matchmaker.Matchmaker, lgr *log.Logger) (*Server, error) {
 	templatePath := "cmd/templates/status.html"
 	tmpl, err := template.ParseFiles(templatePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse status template: %w", err)
 	}
-	return &Server {
-		playerQueue: pq,
-		matchmaker: m_maker,
-		logger: lgr,
+	return &Server{
+		playerQueue:    pq,
+		matchmaker:     m_maker,
+		logger:         lgr,
 		statusTemplate: tmpl,
+		startTime:      time.Now(),
 	}, nil
 }
 
@@ -85,7 +96,8 @@ func (s *Server) joinHandler(w http.ResponseWriter, r *http.Request) {
 	added := s.playerQueue.JoinQueue(player)
 
 	if added {
-		atomic.AddInt64(&addedSinceLastLog, 1)
+		atomic.AddInt64(&loggerAddedSinceLastLog, 1) // For logger summary
+		atomic.AddInt64(&apiAddedSinceLastRead, 1)  // For API status
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "Player %s added to queue", req.PlayerId)
 		s.logger.Printf("Player %s joined queue. Current queue size: %d", req.PlayerId, s.playerQueue.Size())
@@ -95,21 +107,45 @@ func (s *Server) joinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getStatusData() StatusData {
+	uptime := time.Since(s.startTime).Round(time.Second)
+	// For recently joined, read and reset the counter for the API.
+	// This means "recently" is "since the last time this API was called".
+	// If the API is called every 2s from JS, this is effectively "players in last 2s".
+	recent := atomic.SwapInt64(&apiAddedSinceLastRead, 0)
+
+	return StatusData{
+		QueueSize:         s.playerQueue.Size(),
+		ActiveLobbies:     s.matchmaker.GetActiveLobbyCount(),
+		ServerUptime:      uptime.String(),
+		RecentlyJoined:    recent,
+		CurrentServerTime: time.Now().Format(time.RFC1123),
+	}
+}
+
+// HTML status page
+func (s *Server) statusPageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Only GET methods allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	data := struct {
-		QueueSize     int
-		ActiveLobbies int
-	}{
-		QueueSize:     s.playerQueue.Size(),
-		ActiveLobbies: s.matchmaker.GetActiveLobbyCount(),
-	}
+	data := s.getStatusData()
 	err := s.statusTemplate.Execute(w, data)
 	if err != nil {
 		s.logger.Printf("Error executing status template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) statusApiHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET methods allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data := s.getStatusData()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		s.logger.Printf("Error encoding status data to JSON: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -130,19 +166,17 @@ func main() {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
-	startTime := time.Now()
-
 	go func() {
 		summaryTicker := time.NewTicker(2 * time.Second)
 		defer summaryTicker.Stop()
 		for range summaryTicker.C {
-			count := atomic.SwapInt64(&addedSinceLastLog, 0)
+			count := atomic.SwapInt64(&loggerAddedSinceLastLog, 0)
 			currentQueueSize := playerQueue.Size()
 			activeLobbyCount := ghostMatchmaker.GetActiveLobbyCount()
 
 			if count > 0 || currentQueueSize > 0 || activeLobbyCount > 0 {
-				elapsed := time.Since(startTime).Round(time.Second)
-				logger.Printf("[Summary after %v] %d players added in last 2s. Queue size: %d. Active Lobbies (by Matchmaker): %d\n", elapsed, count, currentQueueSize, activeLobbyCount)
+				elapsed := time.Since(serverInstance.startTime).Round(time.Second)
+				logger.Printf("[Summary after %v] %d players added in last 2s (logger count). Queue size: %d. Active Lobbies: %d\n", elapsed, count, currentQueueSize, activeLobbyCount)
 			}
 		}
 	}()
@@ -150,10 +184,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serverInstance.rootHandler)
 	mux.HandleFunc("/join", serverInstance.joinHandler)
-	mux.HandleFunc("/status", serverInstance.statusHandler)
+	mux.HandleFunc("/status", serverInstance.statusPageHandler) // Serves HTML
+	mux.HandleFunc("/api/status", serverInstance.statusApiHandler) // Serves JSON
 
 	httpServer := &http.Server{
-		Addr: ":8080",
+		Addr:    ":8080",
 		Handler: mux,
 	}
 
@@ -162,7 +197,6 @@ func main() {
 
 	go ghostMatchmaker.Start(ctx)
 
-	// Graceful shutdown
 	go func() {
 		<-ctx.Done()
 		logger.Println("Received shutdown signal. Shutting down HTTP server...")
