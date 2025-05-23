@@ -1,18 +1,71 @@
 <html>
     <head>
         <title>
-            Server Status
+            Server Status (Auto-Updating)
         </title>
+        <style>
+            body { font-family: sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            p { margin: 10px 0; font-size: 1.1em; }
+            .label { font-weight: bold; color: #555; }
+            .value { color: #007bff; }
+            #serverTime { font-size: 0.9em; color: #777; margin-top: 20px;}
+        </style>
     </head>
     <body>
         <h1>
-            Server Status
+            Ghost Matchmaking Server Status
         </h1>
         <p>
-            Queue Size: {{.QueueSize}}
+            <span class="label">Current Queue Size:</span> <span id="queueSize" class="value">{{.QueueSize}}</span>
         </p>
         <p>
-            Active Lobbies: {{.ActiveLobbies}}
+            <span class="label">Active Lobbies:</span> <span id="activeLobbies" class="value">{{.ActiveLobbies}}</span>
         </p>
+        <p>
+            <span class="label">Players Joined (since last update):</span> <span id="recentlyJoined" class="value">{{.RecentlyJoined}}</span>
+        </p>
+        <p>
+            <span class="label">Server Uptime:</span> <span id="serverUptime" class="value">{{.ServerUptime}}</span>
+        </p>
+        <p id="serverTime">
+            <span class="label">Current Server Time:</span> <span id="currentServerTime" class="value">{{.CurrentServerTime}}</span>
+        </p>
+
+        <script>
+            const qSize = document.getElementById('queueSize');
+            const aLobs = document.getElementById('activeLobbies');
+            const rJoin = document.getElementById('recentlyJoined');
+            const sTime = document.getElementById('serverUptime');
+            const cTime = document.getElementById('currentServerTime');
+
+            const interval = 1000;
+
+            async function update() {
+                try {
+                    const res = await fetch('/api/status');
+                    if (!res.ok) {
+                        let err = `HTTP error! status: ${res.status}`;
+                        try {
+                            const eData = await res.json();
+                            err += eData.error ? ` - ${eData.error}` : '';
+                        } catch (e) { }
+                        throw new Error(err);
+                    }
+                    const data = await res.json();
+
+                    qSize.textContent = data.queueSize;
+                    aLobs.textContent = data.activeLobbies;
+                    rJoin.textContent = data.recentlyJoined;
+                    sTime.textContent = data.serverUptime;
+                    cTime.textContent = data.currentServerTime;
+
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            setInterval(update, interval);
+        </script>
     </body>
 </html>
