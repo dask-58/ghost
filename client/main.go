@@ -76,6 +76,7 @@ func simulateJoins(requests int, maxConcurrency int, delta int, url string, http
 	}
 }
 
+/*
 func spamJoinRequests(requests int, maxConcurrency int, url string, httpClient *http.Client) {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrency)
@@ -102,6 +103,7 @@ func spamJoinRequests(requests int, maxConcurrency int, url string, httpClient *
 		log.Printf("SPAM REQUESTS: Effective throughput: %.2f req/sec\n", float64(requests) / elapsedTime.Seconds())
 	}
 }
+*/
 
 func main() {
 	url := "http://localhost:8080/join"
